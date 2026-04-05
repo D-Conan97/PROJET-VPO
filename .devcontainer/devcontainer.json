@@ -1,0 +1,16 @@
+{
+  "name": "SecureHome AI Env",
+  "image": "mcr.microsoft.com/devcontainers/python:3.10",
+  "features": {
+    "ghcr.io/fluttertools/devcontainer-features/flutter:1": {}
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y cmake libgl1-mesa-glx && pip install -r requirements.txt && cd SecureHomeApp && flutter pub get",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dart-code.flutter",
+        "ms-python.python"
+      ]
+    }
+  }
+}
