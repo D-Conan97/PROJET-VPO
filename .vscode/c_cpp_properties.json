@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "name": "Mac",
+      "includePath": [
+        "/Users/jk/Documents/Arduino/libraries/**",
+        "/Users/jk/Library/Arduino15/packages/arduino/hardware/avr/**",
+        "/Users/jk/Projet_VPO/**"
+      ],
+      "browse": {
+        "path": [
+          "/Users/jk/Documents/Arduino/libraries/**",
+          "/Users/jk/Library/Arduino15/packages/arduino/hardware/avr/**",
+          "/Users/jk/Projet_VPO/**"
+        ]
+      },
+      "intelliSenseMode": "macos-gcc-x64",
+      "compilerPath": "/usr/bin/g++",
+      "cStandard": "c11",
+      "cppStandard": "c++17"
+    }
+  ],
+  "version": 4
+}

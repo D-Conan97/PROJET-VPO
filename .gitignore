@@ -1,0 +1,21 @@
+# Environnement Python
+bin/
+lib/
+include/
+pyvenv.cfg
+__pycache__/
+*.pyc
+
+# Clés secrètes et configuration
+.env
+config.py  # (Si tu as mis tes clés Supabase dedans, sinon enlève cette ligne)
+visages_connues/  # (Optionnel : si tu ne veux pas mettre les photos de tes amis sur internet)
+
+# Dossiers générés par Flutter
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
