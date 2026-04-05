@@ -61,8 +61,6 @@ Pour lancer à la fois le cerveau Python et l'application Flutter, exécutez le 
 ./start.sh
 \`\`\`
 
-## 👨‍💻 Auteur
-Créé par [SARA DOMTI/ TALHI FATIMA EZZAHRA / OUELD AADOU KAWTAR].
 
 
 ### ETAPES DE CREATION DU SCRIPT POUR L'ÉXECUTION DE TOUS  
@@ -94,3 +92,9 @@ Ouvre ton terminal Mac, place-toi dans le dossier de ton projet, et tape cette c
 Maintenant, à chaque fois que tu veux lancer ton projet complet (Python + Flutter), tu n'as plus qu'à taper cette unique commande dans ton terminal :
 
 # ./start.sh
+
+
+
+
+######👨‍💻 Auteur
+Créé par [SARA DOMTI/ TALHI FATIMA EZZAHRA / OUELD AADOU KAWTAR].
