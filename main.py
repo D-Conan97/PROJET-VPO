@@ -144,9 +144,14 @@ def main():
     thread = threading.Thread(target=process_frames, daemon=True)
     thread.start()
 
+    # --- VARIABLES DE GESTION DU TEMPS ---
     dernier_envoi = 0
     check_timer = 0
     scene_deja_traitee = False
+    
+    # ⏱️ VARIABLES POUR LE DÉLAI DE L'INCONNU
+    unknown_start_time = None
+    CONFIRMATION_DELAY = 1.5  # Modifiez ici pour ajuster le temps d'attente (en secondes)
 
     while True:
         ret, frame = cap.read()
@@ -168,21 +173,33 @@ def main():
         # --- RESET SCENE ---
         if len(noms_detectes) == 0:
             scene_deja_traitee = False
+            unknown_start_time = None # Plus personne n'est là, on annule le chrono
 
         # --- DECISION LOGIC ---
         if noms_detectes and not scene_deja_traitee and (maintenant - dernier_envoi > COOLDOWN_NOTIF):
 
             # SCENARIO A: UNKNOWN
             if "Inconnu" in noms_detectes:
-                print("⚠️ Groupe inconnu. Accès bloqué.")
-                # Lancement de l'upload en arrière-plan !
-                threading.Thread(target=upload_inconnu_thread, args=(frame.copy(),), daemon=True).start()
                 
-                dernier_envoi = maintenant
-                scene_deja_traitee = True
+                # Le chrono n'a pas encore démarré
+                if unknown_start_time is None:
+                    unknown_start_time = maintenant
+                
+                # Le chrono a démarré et le délai est dépassé !
+                elif (maintenant - unknown_start_time) >= CONFIRMATION_DELAY:
+                    print("⚠️ Groupe inconnu confirmé. Accès bloqué.")
+                    # Lancement de l'upload en arrière-plan !
+                    threading.Thread(target=upload_inconnu_thread, args=(frame.copy(),), daemon=True).start()
+                    
+                    dernier_envoi = maintenant
+                    scene_deja_traitee = True
+                    unknown_start_time = None # On réinitialise
 
             # SCENARIO B: ALL KNOWN
             else:
+                # Si on hésitait sur un Inconnu mais qu'on vient de le reconnaître, on annule le chrono !
+                unknown_start_time = None 
+                
                 # Vérification instantanée depuis le cache, aucune attente réseau
                 noms_interdits = [nom for nom in set(noms_detectes) if nom in blacklist_cache]
                 personne_blacklistee = len(noms_interdits) > 0
