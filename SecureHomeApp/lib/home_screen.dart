@@ -1,388 +1,474 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
+
 import 'visitor_card.dart';
 import 'theme.dart';
 import 'loading_shimmer.dart';
 import 'empty_state.dart';
-import 'providers.dart';
 import 'blacklist_screen.dart';
+import 'door_animation.dart';
+import 'providers.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
-  final dynamic supabaseClient;
-
-  const HomeScreen({super.key, this.supabaseClient});
+  const HomeScreen({super.key});
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final supabase = Supabase.instance.client;
-  int? _lastAlertedId;
-  bool _isOffline = false;
+  bool _isDoorOpen = false;
+  
+  // Clé combinée (ID + Nom) pour régler le problème de latence de la porte
+  String? _lastHandledEventKey; 
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    WidgetsBinding.instance.addObserver(this);
-    _initConnectivity();
-  }
-
-  Future<void> _initConnectivity() async {
-    final result = await Connectivity().checkConnectivity();
-    _updateConnectionStatus(result);
-    Connectivity().onConnectivityChanged.listen(_updateConnectionStatus);
-  }
-
-  void _updateConnectionStatus(List<ConnectivityResult> result) {
-    final wasOffline = _isOffline;
-    _isOffline = result.contains(ConnectivityResult.none);
-
-    if (_isOffline != wasOffline && mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      supabase.removeAllChannels();
-    } else if (state == AppLifecycleState.resumed) {
-      _initConnectivity();
-    }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
-    supabase.removeAllChannels();
-    supabase.dispose();
     super.dispose();
   }
 
-  Future<void> _updateVisitorStatus(int id, String status) async {
-    await supabase.from('visiteurs').update({'status': status}).eq('id', id);
-    if (!mounted) return;
-    Navigator.of(context).pop();
+  void _handleVisitorAction(Map<String, dynamic> v, String status) {
+    ref.read(visitorsNotifierProvider.notifier).updateStatus(v['id'], status);
+    setState(() => _isDoorOpen = status == 'Accepter');
+    Navigator.pop(context);
   }
 
-  Future<void> _clearHistory() async {
-    bool confirm =
-        await showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: AppColors.surface,
-              title: const Text("⚠️ Tout effacer ?"),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text(
-                    "Annuler",
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.error,
-                  ),
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text("Tout supprimer"),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-
-    if (confirm) {
-      await supabase.from('visiteurs').delete().gt('id', 0);
-    }
-  }
-
-  void _showIntruderAlert(Map<String, dynamic> visiteur) { 
-    // On enlève la ligne _lastAlertedId car on veut pouvoir cliquer plusieurs fois si besoin
-    
+  void _showIntruderAlert(Map<String, dynamic> visiteur) {
     showDialog(
       context: context,
-      barrierDismissible: true, // Permet de fermer en cliquant à côté si on a cliqué par erreur
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text("⚠️ DÉTECTION EN COURS", textAlign: TextAlign.center),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible( // ⬅️ Évite le bug d'affichage jaune et noir !
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(15),
+      barrierDismissible: true, // Permet de fermer en cliquant à côté
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16), 
+        ),
+        backgroundColor: Colors.white,
+        child: Container(
+          width: 600, 
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // En-tête avec bouton pour fermer/supprimer
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const SizedBox(width: 40), // Pour centrer le texte
+                  const Row(
+                    children: [
+                      Icon(Icons.visibility, color: Colors.black87, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        "DÉTAILS DU VISITEUR",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
+                  ),
+                  // BOUTON DE SUPPRESSION CORRIGÉ ICI
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.grey),
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Supprimer ce visiteur ?'),
+                          content: const Text('Cette action effacera la photo de l\'accueil et du tableau de bord. C\'est irréversible.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Annuler'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              style: TextButton.styleFrom(foregroundColor: Colors.red),
+                              child: const Text('Supprimer'),
+                            ),
+                          ],
+                        ),
+                      );
+
+                      if (confirm == true) {
+                        try {
+                          // Utilisation correcte de ref.read() pour obtenir le client Supabase
+                          await ref.read(supabaseClientProvider)
+                              .from('visiteurs') 
+                              .delete()
+                              .eq('id', visiteur['id']);
+                          
+                          // Ferme le pop-up après la suppression
+                          if (mounted) Navigator.pop(context);
+                              
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Erreur lors de la suppression : $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      }
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
                 child: Image.network(
-                  visiteur['image_url'],
-                  fit: BoxFit.contain,
+                  visiteur['image_url'] ?? '',
+                  width: double.infinity,
+                  height: 350,
+                  fit: BoxFit.cover, 
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    height: 350,
+                    color: Colors.grey[200],
+                    child: const Icon(Icons.person, size: 100, color: Colors.grey),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            Wrap( // ⬅️ Permet aux boutons de passer à la ligne si l'écran est trop petit
-              alignment: WrapAlignment.center,
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.check),
-                  label: const Text("ACCEPTER"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+              const SizedBox(height: 24),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.check, size: 20),
+                    label: const Text("ACCEPTER"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2ECC71), 
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      textStyle: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
+                    ),
+                    onPressed: () => _handleVisitorAction(visiteur, 'Accepter'),
                   ),
-                  onPressed: () => _updateVisitorStatus(visiteur['id'], 'Accepter'),
-                ),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.close),
-                  label: const Text("REFUSER"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.error,
-                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                  const SizedBox(width: 16),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.close, size: 20),
+                    label: const Text("REFUSER"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF4C4C), 
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      textStyle: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1),
+                    ),
+                    onPressed: () => _handleVisitorAction(visiteur, 'Refuser'),
                   ),
-                  onPressed: () => _updateVisitorStatus(visiteur['id'], 'Refuser'),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
-  }
-
-  Future<void> _onRefresh() async {
-    await Future.delayed(const Duration(milliseconds: 500));
   }
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('SecureHome AI'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.block, color: AppColors.error),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const BlacklistScreen()),
-              ),
-              tooltip: "Liste Noire",
+    final visitorsAsync = ref.watch(visitorsStreamProvider);
+    final blacklistAsync = ref.watch(blacklistProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        leading: const Icon(Icons.door_front_door_outlined),
+        title: const Text('SecureHome AI'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.block, color: AppColors.error),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BlacklistScreen()),
             ),
-            IconButton(
-              icon: const Icon(Icons.delete_sweep, color: AppColors.warning),
-              onPressed: _clearHistory,
-              tooltip: "Vider le tableau de bord",
-            ),
-          ],
-          bottom: TabBar(
-            controller: _tabController,
-            tabs: const [
-              Tab(icon: Icon(Icons.security), text: "Surveillance"),
-              Tab(icon: Icon(Icons.history), text: "Tableau de Bord"),
-            ],
           ),
-        ),
-        body: TabBarView(
+          // L'ancien bouton "supprimer tout" (qui fonctionnait) a été restauré ici
+          IconButton(
+            icon: const Icon(Icons.delete_sweep, color: AppColors.warning),
+            onPressed: () async {
+              final confirm = await showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text("Supprimer tout ?"),
+                  content: const Text("Cette action est irréversible."),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Non")),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Oui")),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                ref.read(visitorsNotifierProvider.notifier).deleteAll();
+              }
+            },
+          ),
+        ],
+        bottom: TabBar(
           controller: _tabController,
-          children: [_buildSurveillanceTab(), _buildHistoryTab()],
+          tabs: const [
+            Tab(icon: Icon(Icons.security), text: "Surveillance"),
+            Tab(icon: Icon(Icons.history), text: "Tableau de Bord"),
+          ],
         ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildSurveillance(visitorsAsync, blacklistAsync),
+          _buildHistory(visitorsAsync),
+        ],
       ),
     );
   }
 
-  Widget _buildSurveillanceTab() {
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: supabase
-          .from('visiteurs')
-          .stream(primaryKey: ['id'])
-          .order('id', ascending: false),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const ShimmerLoading();
+  Widget _buildSurveillance(AsyncValue visitorsAsync, AsyncValue blacklistAsync) {
+    return visitorsAsync.when(
+      loading: () => const ShimmerLoading(),
+      error: (e, _) => ErrorState(message: e.toString()),
+      data: (data) {
+        if (data.isEmpty) return const VisitorsEmptyState();
+
+        final blacklist = blacklistAsync.value ?? [];
+        final latest = data.first;
+        final name = latest['nom_du_visiteur'];
+        final status = latest['status'] ?? 'pending';
+
+        final currentEventKey = "${latest['id']}_$name";
+
+        if (_lastHandledEventKey != currentEventKey) {
+          _lastHandledEventKey = currentEventKey;
+
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final isBlocked = isBlacklisted(name, blacklist);
+            final isKnown = name != null && name != 'Inconnu';
+
+            if (isBlocked) {
+              if (status != 'Refuser') {
+                ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Refuser');
+              }
+              setState(() => _isDoorOpen = false);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text("⛔ $name est blacklisté"),
+                  backgroundColor: AppColors.error,
+                ),
+              );
+            } 
+            else if (isKnown) {
+              if (status != 'Accepter') {
+                ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Accepter');
+              }
+              setState(() => _isDoorOpen = true); 
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text("✅ Accès autorisé: $name"),
+                  backgroundColor: AppColors.success,
+                ),
+              );
+              
+              if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              }
+            } 
+            else {
+              setState(() => _isDoorOpen = false);
+              if (status == 'pending') {
+                _showIntruderAlert(latest);
+              }
+            }
+          });
         }
 
-        if (snapshot.hasError) {
-          return ErrorState(
-            message: snapshot.error.toString(),
-            onRetry: () => setState(() {}),
-          );
-        }
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Expanded(
+                child: ListView.separated(
+                  itemCount: data.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (_, i) {
+                    final visitor = data[i];
+                    final visitorName = visitor['nom_du_visiteur'];
+                    final isBlocked = isBlacklisted(visitorName, blacklist);
 
-        final data = snapshot.data!;
-
-        if (data.isEmpty) {
-          return const VisitorsEmptyState();
-        }
-
-        // On a supprimé l'apparition automatique du Pop-up ici.
-        // Désormais, c'est l'utilisateur qui clique sur la photo !
-
-        return RefreshIndicator(
-          onRefresh: _onRefresh,
-          color: AppColors.primary,
-          child: ListView.builder(
-            padding: const EdgeInsets.only(top: 8, bottom: 100),
-            itemCount: data.length,
-            itemBuilder: (context, index) => AnimatedSwitcher(
-              duration: AppConstants.animationMedium,
-              child: VisitorCard(
-                key: ValueKey(data[index]['id']),
-                visiteur: data[index],
-                supabaseClient: supabase,
-                // 👇 LA LIGNE MAGIQUE EST ICI 👇
-                onTap: () => _showIntruderAlert(data[index]),
+                    return AnimatedSwitcher(
+                      duration: AppConstants.animationMedium,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        decoration: isBlocked
+                            ? BoxDecoration(
+                                border: Border.all(color: AppColors.error, width: 3),
+                                borderRadius: BorderRadius.circular(16),
+                              )
+                            : null,
+                        child: Stack(
+                          children: [
+                            VisitorCard(
+                              key: ValueKey(visitor['id']),
+                              visiteur: visitor,
+                              supabaseClient: ref.read(supabaseClientProvider),
+                              onTap: () {
+                                _showIntruderAlert(visitor);
+                              },
+                            ),
+                            if (isBlocked)
+                              Positioned.fill(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: const Center(
+                                    child: Text(
+                                      "BLACKLISTED",
+                                      style: TextStyle(
+                                        color: Colors.red,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
-            ),
+              const SizedBox(width: 24),
+              SizedBox(
+                width: 260,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _isDoorOpen ? "ACCÈS OUVERT" : "ACCÈS VERROUILLÉ",
+                      style: TextStyle(
+                        color: _isDoorOpen ? AppColors.success : AppColors.error,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    AnimatedDoor(isOpen: _isDoorOpen),
+                  ],
+                ),
+              ),
+            ],
           ),
         );
       },
     );
   }
 
-  Widget _buildHistoryTab() {
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: supabase
-          .from('visiteurs')
-          .stream(primaryKey: ['id'])
-          .order('id', ascending: false),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const TableShimmerLoading();
-        }
-
-        if (snapshot.hasError) {
-          return ErrorState(
-            message: snapshot.error.toString(),
-            onRetry: () => setState(() {}),
-          );
-        }
-
-        final data = snapshot.data!;
-
-        if (data.isEmpty) {
-          return const HistoryEmptyState();
-        }
+  Widget _buildHistory(AsyncValue visitorsAsync) {
+    return visitorsAsync.when(
+      loading: () => const TableShimmerLoading(),
+      error: (e, _) => ErrorState(message: e.toString()),
+      data: (data) {
+        if (data.isEmpty) return const HistoryEmptyState();
 
         return RefreshIndicator(
-          onRefresh: _onRefresh,
-          color: AppColors.primary,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(AppColors.surface),
-                    columnSpacing: 20,
-                    horizontalMargin: 16,
-                    columns: const [
-                      DataColumn(
-                        label: Text(
-                          'Heure',
+          onRefresh: () async => ref.refresh(visitorsStreamProvider),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: SizedBox(
+              width: double.infinity, 
+              child: DataTable(
+                headingRowHeight: 60,
+                dataRowMinHeight: 60,
+                dataRowMaxHeight: 60,
+                headingTextStyle: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+                columns: const [
+                  DataColumn(label: Text('Heure')),
+                  DataColumn(label: Text('Nom')),
+                  DataColumn(label: Text('Statut')),
+                  DataColumn(label: Text('Vérification')),
+                ],
+                rows: data.map<DataRow>((v) {
+                  final name = v['nom_du_visiteur'] ?? 'Inconnu';
+                  final status = v['status'] ?? 'pending';
+                  final isAuto = name != 'Inconnu';
+
+                  Color statusColor;
+                  if (status == 'Accepter' || status == 'Terminé') {
+                    statusColor = const Color(0xFF2ECC71); 
+                  } else if (status == 'Refuser') {
+                    statusColor = const Color(0xFFFF4C4C); 
+                  } else {
+                    statusColor = Colors.orange; 
+                  }
+
+                  return DataRow(
+                    color: WidgetStateProperty.resolveWith<Color?>((states) {
+                      if (status == 'Refuser') {
+                        return const Color(0xFFFF4C4C).withOpacity(0.1); 
+                      }
+                      return null; 
+                    }),
+                    cells: [
+                      DataCell(Text(_formatTime(v['created_at']))),
+                      DataCell(Text(name)),
+                      DataCell(
+                        Text(
+                          status,
                           style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
+                            color: statusColor,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                      DataColumn(
-                        label: Text(
-                          'Nom',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                      ),
-                      DataColumn(
-                        label: Text(
-                          'Statut',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                      ),
-                      DataColumn(
-                        label: Text(
-                          'Vérification',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
+                      DataCell(
+                        Row(
+                          children: [
+                            Icon(
+                              isAuto ? Icons.smart_toy : Icons.person,
+                              size: 16,
+                              color: Colors.grey[600],
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              isAuto ? 'Auto (IA)' : 'Manuel',
+                              style: TextStyle(color: Colors.grey[800]),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                    rows: data.map((v) {
-                      final nom = v['nom_du_visiteur'] ?? 'Inconnu';
-                      final isAuto = nom != 'Inconnu';
-                      final status = v['status'] ?? 'pending';
-                      final isRefused =
-                          status == 'Refuser' || status == 'Terminer';
-                      final isFinished =
-                          status == 'Accepter' ||
-                          status == 'Terminé' ||
-                          status == 'Terminer';
-
-                      return DataRow(
-                        color: WidgetStateProperty.resolveWith((states) {
-                          if (isRefused) {
-                            return AppColors.error.withAlpha(25);
-                          }
-                          return Colors.transparent;
-                        }),
-                        cells: [
-                          DataCell(Text(_formatTime(v['created_at']))),
-                          DataCell(Text(nom)),
-                          DataCell(
-                            Text(
-                              status,
-                              style: TextStyle(
-                                color: isFinished
-                                    ? AppColors.success
-                                    : isRefused
-                                    ? AppColors.error
-                                    : AppColors.warning,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          DataCell(
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  isAuto ? Icons.smart_toy : Icons.person,
-                                  size: 18,
-                                  color: isAuto
-                                      ? AppColors.primary
-                                      : AppColors.textMuted,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(isAuto ? 'Auto (IA)' : 'Manuel'),
-                              ],
-                            ),
-                          ),
-                        ],
-                      );
-                    }).toList(),
-                  ),
-                ),
-              );
-            },
+                  );
+                }).toList(),
+              ),
+            ),
           ),
         );
       },
@@ -392,9 +478,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   String _formatTime(String? createdAt) {
     if (createdAt == null) return '--:--';
     try {
-      return DateFormat(
-        'HH:mm',
-      ).format(DateTime.parse(createdAt).add(const Duration(hours: 1)));
+      return DateFormat('HH:mm')
+          .format(DateTime.parse(createdAt).add(const Duration(hours: 1)));
     } catch (_) {
       return '--:--';
     }

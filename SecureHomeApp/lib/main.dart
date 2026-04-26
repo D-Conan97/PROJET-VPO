@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'home_screen.dart';
 import 'theme.dart';
+import 'loading_screen.dart';
+
+
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,7 +16,7 @@ void main() async {
     anonKey: 'sb_publishable_WJRUyh8nLyWNnjLyaN-b0g_zZtL2ms3',
   );
 
-  runApp(const ProviderScope(child: const SecureHomeApp()));
+  runApp(const ProviderScope(child: SecureHomeApp()));
 }
 
 class SecureHomeApp extends StatelessWidget {
@@ -24,7 +28,8 @@ class SecureHomeApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'SecureHome',
       theme: AppTheme.light,
-      home: const HomeScreen(),
+      home: const AppLoadingScreen(),
     );
   }
 }
+

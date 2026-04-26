@@ -3,7 +3,8 @@ echo ==========================================
 echo    Lancement de SecureHome AI (Windows)
 echo ==========================================
 
-:: 1. Lancer Python dans une nouvelle fenetre avec l'environnement virtuel
+:: 
+1. Lancer Python dans une nouvelle fenetre avec l'environnement virtuel
 echo [1/2] Lancement de la camera et de l'IA...
 start cmd /k "env\Scripts\activate && python main.py"
 
