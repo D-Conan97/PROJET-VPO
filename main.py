@@ -23,6 +23,9 @@ tracked_faces = []
 id_en_attente = None
 is_checking_decision = False
 
+# *** NOUVEAU : Variable globale pour la blacklist ***
+blacklist_cache = set()
+
 def charger_visages():
     if not os.path.exists(D_CONNUS): 
         os.makedirs(D_CONNUS)
@@ -45,6 +48,20 @@ def charger_visages():
                         print(f"⚠️ Erreur avec {chemin_image} : {e}")
                         
     print(f"✅ IA prête : {len(connaissances_noms)} visages connus.")
+
+# *** NOUVEAU : Fonction qui tourne en boucle pour mettre à jour la blacklist ***
+def synchroniser_blacklist_thread():
+    global blacklist_cache
+    while True:
+        try:
+            res = supabase_utils.supabase.table('blacklist').select('nom_du_visiteur').execute()
+            # On met à jour la variable globale instantanément
+            blacklist_cache = set([x['nom_du_visiteur'] for x in res.data])
+        except Exception as e:
+            print(f"⚠️ Erreur lors de la mise à jour de la blacklist : {e}")
+        
+        # On attend 5 secondes avant de revérifier (économise les requêtes Supabase)
+        time.sleep(5)
 
 # --- THREAD: FACE RECOGNITION ---
 def process_frames():
@@ -126,19 +143,15 @@ def check_decision_thread():
         is_checking_decision = False
 
 def main():
-    global latest_frame, face_results, face_locations, id_en_attente, is_checking_decision
+    global latest_frame, face_results, face_locations, id_en_attente, is_checking_decision, blacklist_cache
 
     charger_visages()
     cap = cv2.VideoCapture(0)
 
-    # LOAD BLACKLIST ONCE
-    blacklist_cache = set()
-    try:
-        res = supabase_utils.supabase.table('blacklist').select('nom_du_visiteur').execute()
-        blacklist_cache = set([x['nom_du_visiteur'] for x in res.data])
-        print("✅ Blacklist chargée:", blacklist_cache)
-    except:
-        print("⚠️ Impossible de charger blacklist")
+    # *** NOUVEAU : LANCEMENT DU THREAD DE SYNCHRONISATION BLACKLIST ***
+    thread_blacklist = threading.Thread(target=synchroniser_blacklist_thread, daemon=True)
+    thread_blacklist.start()
+    print("🔄 Synchronisation de la blacklist en arrière-plan activée...")
 
     # START THREAD IA
     thread = threading.Thread(target=process_frames, daemon=True)
@@ -151,7 +164,7 @@ def main():
     
     # ⏱️ VARIABLES POUR LE DÉLAI DE L'INCONNU
     unknown_start_time = None
-    CONFIRMATION_DELAY = 1.5  # Modifiez ici pour ajuster le temps d'attente (en secondes)
+    CONFIRMATION_DELAY = 0.8  # Modifiez ici pour ajuster le temps d'attente (en secondes)
 
     while True:
         ret, frame = cap.read()

@@ -20,9 +20,8 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  bool _isDoorOpen = false;
   
-  // Clé combinée (ID + Nom) pour régler le problème de latence de la porte
+  // Clé combinée (ID + Nom) pour régler le problème de répétition des pop-ups
   String? _lastHandledEventKey; 
 
   @override
@@ -39,14 +38,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _handleVisitorAction(Map<String, dynamic> v, String status) {
     ref.read(visitorsNotifierProvider.notifier).updateStatus(v['id'], status);
-    setState(() => _isDoorOpen = status == 'Accepter');
     Navigator.pop(context);
   }
 
   void _showIntruderAlert(Map<String, dynamic> visiteur) {
     showDialog(
       context: context,
-      barrierDismissible: true, // Permet de fermer en cliquant à côté
+      barrierDismissible: true,
       builder: (_) => Dialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16), 
@@ -58,11 +56,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // En-tête avec bouton pour fermer/supprimer
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const SizedBox(width: 40), // Pour centrer le texte
+                  const SizedBox(width: 40), 
                   const Row(
                     children: [
                       Icon(Icons.visibility, color: Colors.black87, size: 20),
@@ -77,7 +74,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       ),
                     ],
                   ),
-                  // BOUTON DE SUPPRESSION CORRIGÉ ICI
                   IconButton(
                     icon: const Icon(Icons.close, color: Colors.grey),
                     onPressed: () async {
@@ -102,15 +98,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
                       if (confirm == true) {
                         try {
-                          // Utilisation correcte de ref.read() pour obtenir le client Supabase
                           await ref.read(supabaseClientProvider)
                               .from('visiteurs') 
                               .delete()
                               .eq('id', visiteur['id']);
-                          
-                          // Ferme le pop-up après la suppression
                           if (mounted) Navigator.pop(context);
-                              
                         } catch (e) {
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -204,7 +196,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               MaterialPageRoute(builder: (_) => const BlacklistScreen()),
             ),
           ),
-          // L'ancien bouton "supprimer tout" (qui fonctionnait) a été restauré ici
           IconButton(
             icon: const Icon(Icons.delete_sweep, color: AppColors.warning),
             onPressed: () async {
@@ -251,55 +242,57 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       data: (data) {
         if (data.isEmpty) return const VisitorsEmptyState();
 
-        final blacklist = blacklistAsync.value ?? [];
+        final rawBlacklist = blacklistAsync.value ?? [];
+        final List<String> blacklist = List<String>.from(
+          rawBlacklist.map((item) => item.toString())
+        );
+
         final latest = data.first;
         final name = latest['nom_du_visiteur'];
         final status = latest['status'] ?? 'pending';
 
-        final currentEventKey = "${latest['id']}_$name";
+        // CORRECTION 1 : On sécurise le mot "inconnu" (majuscules/espaces)
+        final normalizedName = name?.trim().toLowerCase() ?? 'inconnu';
+        final isKnown = normalizedName != 'inconnu';
+        final isBlocked = isBlacklisted(name, blacklist);
 
+        // --- CALCUL DE L'ÉTAT DE LA PORTE EN TEMPS RÉEL ---
+        bool isDoorOpen = false;
+        
+        if (isBlocked) {
+          isDoorOpen = false; 
+          if (status != 'Refuser') {
+            Future.microtask(() => ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Refuser'));
+          }
+        } else if (status == 'Refuser') {
+          // CORRECTION 2 : RÈGLE ABSOLUE. Si c'est refusé, on verrouille.
+          isDoorOpen = false; 
+        } else if (status == 'Accepter') {
+          isDoorOpen = true; 
+        } else if (isKnown) {
+          isDoorOpen = true; 
+          if (status != 'Accepter') {
+            Future.microtask(() => ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Accepter'));
+          }
+        }
+
+        // --- GESTION DES NOTIFICATIONS ---
+        final currentEventKey = "${latest['id']}_$name";
         if (_lastHandledEventKey != currentEventKey) {
           _lastHandledEventKey = currentEventKey;
 
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            final isBlocked = isBlacklisted(name, blacklist);
-            final isKnown = name != null && name != 'Inconnu';
-
             if (isBlocked) {
-              if (status != 'Refuser') {
-                ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Refuser');
-              }
-              setState(() => _isDoorOpen = false);
-
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text("⛔ $name est blacklisté"),
-                  backgroundColor: AppColors.error,
-                ),
+                SnackBar(content: Text("⛔ $name est blacklisté"), backgroundColor: AppColors.error),
               );
-            } 
-            else if (isKnown) {
-              if (status != 'Accepter') {
-                ref.read(visitorsNotifierProvider.notifier).updateStatus(latest['id'], 'Accepter');
-              }
-              setState(() => _isDoorOpen = true); 
-
+            } else if (isKnown) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text("✅ Accès autorisé: $name"),
-                  backgroundColor: AppColors.success,
-                ),
+                SnackBar(content: Text("✅ Accès autorisé: $name"), backgroundColor: AppColors.success),
               );
-              
-              if (Navigator.canPop(context)) {
-                Navigator.pop(context);
-              }
-            } 
-            else {
-              setState(() => _isDoorOpen = false);
-              if (status == 'pending') {
-                _showIntruderAlert(latest);
-              }
+              if (Navigator.canPop(context)) Navigator.pop(context);
+            } else if (status == 'pending') {
+              _showIntruderAlert(latest);
             }
           });
         }
@@ -315,13 +308,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   itemBuilder: (_, i) {
                     final visitor = data[i];
                     final visitorName = visitor['nom_du_visiteur'];
-                    final isBlocked = isBlacklisted(visitorName, blacklist);
+                    final isBlockedItem = isBlacklisted(visitorName, blacklist);
 
                     return AnimatedSwitcher(
                       duration: AppConstants.animationMedium,
                       child: Container(
                         margin: const EdgeInsets.symmetric(vertical: 4),
-                        decoration: isBlocked
+                        decoration: isBlockedItem
                             ? BoxDecoration(
                                 border: Border.all(color: AppColors.error, width: 3),
                                 borderRadius: BorderRadius.circular(16),
@@ -337,20 +330,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                                 _showIntruderAlert(visitor);
                               },
                             ),
-                            if (isBlocked)
+                            if (isBlockedItem)
                               Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: const Center(
-                                    child: Text(
-                                      "BLACKLISTED",
-                                      style: TextStyle(
-                                        color: Colors.red,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 18,
+                                child: IgnorePointer(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Center(
+                                      child: Text(
+                                        "BLACKLISTED",
+                                        style: TextStyle(
+                                          color: Colors.red,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 18,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -370,14 +365,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      _isDoorOpen ? "ACCÈS OUVERT" : "ACCÈS VERROUILLÉ",
+                      isDoorOpen ? "ACCÈS OUVERT" : "ACCÈS VERROUILLÉ",
                       style: TextStyle(
-                        color: _isDoorOpen ? AppColors.success : AppColors.error,
+                        color: isDoorOpen ? AppColors.success : AppColors.error,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     const SizedBox(height: 20),
-                    AnimatedDoor(isOpen: _isDoorOpen),
+                    AnimatedDoor(isOpen: isDoorOpen),
                   ],
                 ),
               ),
@@ -387,7 +382,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       },
     );
   }
-
+  
   Widget _buildHistory(AsyncValue visitorsAsync) {
     return visitorsAsync.when(
       loading: () => const TableShimmerLoading(),
