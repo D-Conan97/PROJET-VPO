@@ -23,7 +23,7 @@ tracked_faces = []
 id_en_attente = None
 is_checking_decision = False
 
-# *** NOUVEAU : Variable globale pour la blacklist ***
+# Variable globale pour la blacklist
 blacklist_cache = set()
 
 def charger_visages():
@@ -49,30 +49,22 @@ def charger_visages():
                         
     print(f"✅ IA prête : {len(connaissances_noms)} visages connus.")
 
-# *** NOUVEAU : Fonction qui tourne en boucle pour mettre à jour la blacklist ***
+# --- FONCTION DE SYNCHRONISATION BLACKLIST ---
 def synchroniser_blacklist_thread():
     global blacklist_cache
     while True:
         try:
             res = supabase_utils.supabase.table('blacklist').select('nom_du_visiteur').execute()
-            # On met à jour la variable globale instantanément
             blacklist_cache = set([x['nom_du_visiteur'] for x in res.data])
         except Exception as e:
             print(f"⚠️ Erreur lors de la mise à jour de la blacklist : {e}")
-        
-        # On attend 5 secondes avant de revérifier (économise les requêtes Supabase)
         time.sleep(5)
 
-# --- THREAD: FACE RECOGNITION ---
+# --- THREAD: FACE RECOGNITION (CORRIGÉ POUR LA VITESSE) ---
 def process_frames():
     global latest_frame, face_results, face_locations
 
     while True:
-        # Limit processing rate
-        if time.time() % 0.2 > 0.01:
-            time.sleep(0.01)
-            continue
-
         if latest_frame is None:
             time.sleep(0.01)
             continue
@@ -80,11 +72,12 @@ def process_frames():
         with lock:
             frame = latest_frame.copy()
 
-        # AI processing
+        # On réduit la taille pour accélérer le traitement (0.25 = 1/4 de la taille)
         small_frame = cv2.resize(frame, (0,0), fx=0.25, fy=0.25)
         rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-        locs = face_recognition.face_locations(rgb_small)
+        # model="hog" est forcé ici : c'est la méthode de détection la plus rapide pour processeur standard
+        locs = face_recognition.face_locations(rgb_small, model="hog")
         encs = face_recognition.face_encodings(rgb_small, locs)
 
         noms_detectes = []
@@ -108,7 +101,8 @@ def process_frames():
             face_results = noms_detectes
             face_locations = locs
 
-        time.sleep(0.01)
+        # On limite proprement à environ 10 traitements par seconde pour ne pas faire surchauffer l'ordi
+        time.sleep(0.1)
 
 # --- THREADS RESEAUX (POUR NE PAS BLOQUER LA CAMERA) ---
 def upload_inconnu_thread(frame_copy):
@@ -148,7 +142,11 @@ def main():
     charger_visages()
     cap = cv2.VideoCapture(0)
 
-    # *** NOUVEAU : LANCEMENT DU THREAD DE SYNCHRONISATION BLACKLIST ***
+    # --- RÉSOLUTION DE LA CAMÉRA RÉDUITE POUR PLUS DE VITESSE ---
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    # LANCEMENT DU THREAD DE SYNCHRONISATION BLACKLIST
     thread_blacklist = threading.Thread(target=synchroniser_blacklist_thread, daemon=True)
     thread_blacklist.start()
     print("🔄 Synchronisation de la blacklist en arrière-plan activée...")
@@ -164,7 +162,7 @@ def main():
     
     # ⏱️ VARIABLES POUR LE DÉLAI DE L'INCONNU
     unknown_start_time = None
-    CONFIRMATION_DELAY = 0.8  # Modifiez ici pour ajuster le temps d'attente (en secondes)
+    CONFIRMATION_DELAY = 0.8  
 
     while True:
         ret, frame = cap.read()
@@ -186,7 +184,7 @@ def main():
         # --- RESET SCENE ---
         if len(noms_detectes) == 0:
             scene_deja_traitee = False
-            unknown_start_time = None # Plus personne n'est là, on annule le chrono
+            unknown_start_time = None
 
         # --- DECISION LOGIC ---
         if noms_detectes and not scene_deja_traitee and (maintenant - dernier_envoi > COOLDOWN_NOTIF):
@@ -194,38 +192,31 @@ def main():
             # SCENARIO A: UNKNOWN
             if "Inconnu" in noms_detectes:
                 
-                # Le chrono n'a pas encore démarré
                 if unknown_start_time is None:
                     unknown_start_time = maintenant
                 
-                # Le chrono a démarré et le délai est dépassé !
                 elif (maintenant - unknown_start_time) >= CONFIRMATION_DELAY:
                     print("⚠️ Groupe inconnu confirmé. Accès bloqué.")
-                    # Lancement de l'upload en arrière-plan !
                     threading.Thread(target=upload_inconnu_thread, args=(frame.copy(),), daemon=True).start()
                     
                     dernier_envoi = maintenant
                     scene_deja_traitee = True
-                    unknown_start_time = None # On réinitialise
+                    unknown_start_time = None
 
             # SCENARIO B: ALL KNOWN
             else:
-                # Si on hésitait sur un Inconnu mais qu'on vient de le reconnaître, on annule le chrono !
                 unknown_start_time = None 
                 
-                # Vérification instantanée depuis le cache, aucune attente réseau
                 noms_interdits = [nom for nom in set(noms_detectes) if nom in blacklist_cache]
                 personne_blacklistee = len(noms_interdits) > 0
 
                 if personne_blacklistee:
                     liste = ", ".join(noms_interdits)
                     print(f"🚫 REFUSÉ: {liste}")
-                    # Upload en arrière-plan
                     threading.Thread(target=upload_connu_thread, args=(frame.copy(), liste, "Refuser"), daemon=True).start()
                 else:
                     liste = ", ".join(set(noms_detectes))
                     print(f"🔓 AUTORISÉ: {liste}")
-                    # Upload en arrière-plan
                     threading.Thread(target=upload_connu_thread, args=(frame.copy(), liste, "Accepter"), daemon=True).start()
 
                 dernier_envoi = maintenant
@@ -234,7 +225,6 @@ def main():
         # --- CHECK MANUAL DECISION ---
         if id_en_attente and not is_checking_decision and (maintenant - check_timer > 2):
             check_timer = maintenant
-            # Vérification réseau en arrière-plan
             threading.Thread(target=check_decision_thread, daemon=True).start()
 
         # ===============================
